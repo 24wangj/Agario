@@ -26,13 +26,16 @@ MAP_LINE_WIDTH = 1
 PLAYER_SIZE_MIN = 1000
 PLAYER_SIZE_MAX = 5000000
 PLAYER_SPEED = 4
+PLAYER_ACCELERATION = 0.5
 PLAYER_DEADBAND = 40
 PLAYER_RADIUS_INCREMENT = 0.05
 PLAYER_EJECT_SIZE_MIN = 3000
-PLAYER_SPLIT_SPEED = PLAYER_SPEED * 5
-PLAYER_SPLIT_DECELERATION = 0.97
+PLAYER_SPLIT_SPEED = PLAYER_SPEED * 6
+PLAYER_SPLIT_DECELERATION = 1.04
+PLAYER_SPLIT_DECELERATION_DEADBAND = 0.1
 PLAYER_SPLIT_SIZE_MIN = 5000
-PLAYER_SPLIT_PUSH_SPEED = 2
+PLAYER_SPLIT_PUSH_SPEED = 3
+PLAYER_SPLIT_PUSH_DEADBAND = 0.05
 
 # Cell constants
 CELLS_SIZE = 400
@@ -61,37 +64,57 @@ class Camera:
 
 class PlayerCell:
     def __init__(self, x, y, size, color):
-        self.yVel = None
-        self.xVel = None
         self.x = x
         self.y = y
         self.size = size
         self.prevRadius = self.get_radius()
         self.color = color
-        self.speed = PLAYER_SPEED
+        self.xVel = 0
+        self.yVel = 0
+        self.xAcc = 0
+        self.yAcc = 0
+        self.xSplitVel = 0
+        self.ySplitVel = 0
 
     def get_radius(self):
         return math.sqrt(self.size / math.pi)
+
+    def distance_to(self, x, y):
+        return math.sqrt(pow(x - self.x, 2) + pow(y - self.y, 2))
 
     def follow(self, mouse_x, mouse_y):
         deltaX = mouse_x - self.x
         deltaY = mouse_y - self.y
         hypotenuse = math.sqrt(pow(deltaX, 2) + pow(deltaY, 2))
         # Prevents division by zero
-        speedMod = hypotenuse and self.speed / hypotenuse or 0
+        speedMod = hypotenuse and PLAYER_ACCELERATION / hypotenuse or 0
 
         if math.fabs(hypotenuse) < PLAYER_DEADBAND:
-            self.xVel = (deltaX * ((hypotenuse / PLAYER_DEADBAND) * speedMod))
-            self.yVel = (deltaY * ((hypotenuse / PLAYER_DEADBAND) * speedMod))
+            self.xAcc = (deltaX * ((hypotenuse / PLAYER_DEADBAND) * speedMod))
+            self.yAcc = (deltaY * ((hypotenuse / PLAYER_DEADBAND) * speedMod))
         else:
-            self.xVel = (deltaX * speedMod)
-            self.yVel = (deltaY * speedMod)
+            self.xAcc = (deltaX * speedMod)
+            self.yAcc = (deltaY * speedMod)
 
     def move(self):
-        self.x += self.xVel
-        self.y += self.yVel
-        if self.speed > PLAYER_SPEED:
-            self.speed -= PLAYER_SPEED / self.speed
+        self.xVel += self.xAcc
+        self.yVel += self.yAcc
+
+        self.x += self.xVel + self.xSplitVel
+        self.y += self.yVel + self.ySplitVel
+
+        # Gradually decreases velocity after splitting
+        self.xSplitVel = self.xSplitVel / PLAYER_SPLIT_DECELERATION if (math.fabs(self.xSplitVel) >
+                                                                        PLAYER_SPLIT_DECELERATION_DEADBAND) else 0
+        self.ySplitVel = self.ySplitVel / PLAYER_SPLIT_DECELERATION if (math.fabs(self.ySplitVel) >
+                                                                        PLAYER_SPLIT_DECELERATION_DEADBAND) else 0
+
+        # Caps velocity to maximum speed
+        if math.sqrt(pow(self.xVel, 2) + pow(self.yVel, 2)) > PLAYER_SPEED:
+            velVector = pygame.math.Vector2(self.xVel, self.yVel).normalize()
+            velVector.scale_to_length(PLAYER_SPEED)
+            self.xVel = velVector.x
+            self.yVel = velVector.y
 
         # Prevents player from leaving the map
         if self.x < 0:
@@ -118,15 +141,14 @@ class PlayerCell:
         self.size = nextSize
 
     def split(self, player_cell, mouse_x, mouse_y):
-        self.speed = PLAYER_SPLIT_SPEED
         deltaX = mouse_x - self.x
         deltaY = mouse_y - self.y
         hypotenuse = math.sqrt(pow(deltaX, 2) + pow(deltaY, 2))
         # Prevents division by zero
-        speedMod = hypotenuse and self.speed / hypotenuse or 0
+        speedMod = hypotenuse and PLAYER_SPLIT_SPEED / hypotenuse or 0
 
-        self.xVel = int(deltaX * speedMod) + player_cell.xVel
-        self.yVel = int(deltaY * speedMod) + player_cell.yVel
+        self.xSplitVel = int(deltaX * speedMod) + player_cell.xVel
+        self.ySplitVel = int(deltaY * speedMod) + player_cell.yVel
 
         angle = math.atan2(player_cell.y - mouse_y, player_cell.x - mouse_x) - math.pi
         self.x = (player_cell.get_radius() * math.cos(angle)) + player_cell.x
@@ -211,7 +233,7 @@ for a in range(CELLS_MAX):
                            int(random() * 250))))
 
 
-def draw_window(font):
+def draw_window(font, fps):
     window.fill(COLOR_WHITE)
 
     for m in range(0, MAP_DIMENSIONS + MAP_SPACE, MAP_SPACE):
@@ -230,18 +252,19 @@ def draw_window(font):
         p.draw()
 
     if DEBUG_TEXT:
-        textSurface = font.render("(x, y): (" + str(int(playerList[0].x)) + ", " + str(int(playerList[0].y)) + ")",
-                                  False,
-                                  COLOR_BLACK, COLOR_WHITE)
+        textSurface = font.render("FPS: " + str(int(fps)), False, COLOR_BLACK, COLOR_WHITE)
         window.blit(textSurface, (10, 10))
-        textSurface = font.render("Size: " + str(int(playerList[0].size)), False, COLOR_BLACK, COLOR_WHITE)
+        textSurface = font.render("(x, y)[0]: (" + str(int(playerList[0].x)) + ", " + str(int(playerList[0].y)) + ")",
+                                  False, COLOR_BLACK, COLOR_WHITE)
         window.blit(textSurface, (10, 12 + FONT_SIZE))
-        textSurface = font.render("# Player Cells: " + str(len(playerList)), False, COLOR_BLACK, COLOR_WHITE)
+        textSurface = font.render("Size[0]: " + str(int(playerList[0].size)), False, COLOR_BLACK, COLOR_WHITE)
         window.blit(textSurface, (10, 14 + 2 * FONT_SIZE))
-        textSurface = font.render("# Cells: " + str(len(cellsList)), False, COLOR_BLACK, COLOR_WHITE)
+        textSurface = font.render("# Player Cells: " + str(len(playerList)), False, COLOR_BLACK, COLOR_WHITE)
         window.blit(textSurface, (10, 16 + 3 * FONT_SIZE))
-        textSurface = font.render("Zoom: " + str(camera.zoom), False, COLOR_BLACK, COLOR_WHITE)
+        textSurface = font.render("# Cells: " + str(len(cellsList)), False, COLOR_BLACK, COLOR_WHITE)
         window.blit(textSurface, (10, 18 + 4 * FONT_SIZE))
+        textSurface = font.render("Zoom: " + str(camera.zoom), False, COLOR_BLACK, COLOR_WHITE)
+        window.blit(textSurface, (10, 20 + 5 * FONT_SIZE))
 
     pygame.display.update()
 
@@ -255,8 +278,7 @@ def main():
     font = pygame.font.Font(FONT_PATH, FONT_SIZE)
     running = True
     while running:
-        clock.tick(FPS)
-
+        tick = clock.tick(FPS)
         mouseX, mouseY = mouse.get_pos()
 
         for event in pygame.event.get():
@@ -328,18 +350,20 @@ def main():
                      mouseY + (camera.y + WINDOW_HEIGHT / 2) / camera.zoom - WINDOW_HEIGHT / 2)
             p.move()
             nextIndex = index + 1
+
+            # Collision between player cells
             while nextIndex < playerListLength:
                 if p.is_colliding(playerList[nextIndex]):
-                    vector = pygame.math.Vector2(playerList[nextIndex].x - p.x, playerList[nextIndex].y - p.y).normalize()
-                    vector.scale_to_length(PLAYER_SPLIT_PUSH_SPEED)
-                    if len(vector) == 0:
-                        vector = pygame.math.Vector2(0, 1)
+                    vector = pygame.math.Vector2(playerList[nextIndex].x - p.x, playerList[nextIndex].y - p.y)
+                    if vector.length() == 0:
+                        vector = pygame.math.Vector2(0, 0)
+                    else:
+                        vector.normalize()
+                        # vector.scale_to_length(PLAYER_SPLIT_PUSH_SPEED)
+                        vector.scale_to_length((p.get_radius() + playerList[nextIndex].get_radius()) - (playerList[nextIndex].distance_to(p.x, p.y)))
 
-                    p.x -= vector.x
-                    p.y -= vector.y
-
-                    playerList[nextIndex].x += vector.x
-                    playerList[nextIndex].y += vector.y
+                    p.x = p.x - vector.x if math.fabs(vector.x) > PLAYER_SPLIT_PUSH_DEADBAND else p.x
+                    p.y = p.y - vector.y if math.fabs(vector.y) > PLAYER_SPLIT_PUSH_DEADBAND else p.y
 
                 nextIndex += 1
 
@@ -353,15 +377,13 @@ def main():
 
         # Generates new cells
         cellsListLength = len(cellsList)
-        if cellsListLength < CELLS_MAX and clock.tick() % (cellsListLength / 4) == 0:
+        if cellsListLength < CELLS_MAX and tick % (cellsListLength / 4) == 0:
             cellsList.append(Cell(int(random() * MAP_DIMENSIONS),
                                   int(random() * MAP_DIMENSIONS), CELLS_SIZE,
                                   (int(random() * 250), int(random() * 250),
                                    int(random() * 250))))
 
-        # print(clock.tick())
-
-        draw_window(font)
+        draw_window(font, clock.get_fps())
 
     pygame.quit()
 
