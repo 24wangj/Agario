@@ -1,4 +1,5 @@
 import math
+import numpy
 from random import random
 
 import pygame
@@ -9,8 +10,11 @@ WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 800
 WINDOW_TITLE = "agar.io"
 DEBUG_TEXT = True
+DEBUG_TEXT_PADDING = 10
 FONT_PATH = "Ubuntu-Bold.ttf"
-FONT_SIZE = 16
+FONT_DEBUG_SIZE = 16
+FONT_CELLS_SIZE = 100
+FONT_ANTI_ALIAS = True
 
 # Camera variables
 deltaTime = 0
@@ -26,6 +30,7 @@ MAP_SPACE = 50
 MAP_LINE_WIDTH = 1
 
 # Player variables
+PLAYER_NAME = "John Cena"
 PLAYER_SIZE_START = 100000
 PLAYER_SIZE_MIN = 1000
 PLAYER_SIZE_MAX = 5000000
@@ -43,6 +48,7 @@ PLAYER_PUSH_DEADBAND = 0.05
 PLAYER_MERGE_TIME = FPS * 10
 PLAYER_MERGE_SPEED = 0.4
 PLAYER_MERGE_DEADBAND = 10
+PLAYER_DECAY_RATE = 0.00001
 
 # Cell variables
 CELLS_SIZE = 400
@@ -87,7 +93,7 @@ class Camera:
 
 
 class PlayerCell:
-    def __init__(self, pos, size, color):
+    def __init__(self, pos, size, color, name):
         self.pos = pos
         self.vel = pygame.math.Vector2(0, 0)
         self.acc = pygame.math.Vector2(0, 0)
@@ -96,10 +102,11 @@ class PlayerCell:
         self.radius = math.sqrt(self.size / math.pi)
         self.radius_drawn = self.radius
         self.color = color
+        self.name = name
         self.split_timer = None
 
     def follow(self, mouse_pos):
-        deltaPos = (mouse_pos - self.pos).normalize()
+        deltaPos = (mouse_pos - self.pos)
         deltaPos.scale_to_length(PLAYER_ACCELERATION)
         self.acc.x = deltaPos.x
         self.acc.y = deltaPos.y
@@ -108,12 +115,11 @@ class PlayerCell:
         self.vel += self.acc
         self.pos += self.vel + self.split_vel
         # Gradually decreases velocity after splitting
-        self.split_vel = self.split_vel / PLAYER_SPLIT_DECELERATION if \
-            self.split_vel.length() > PLAYER_SPLIT_DECELERATION_DEADBAND else pygame.math.Vector2(0, 0)
+        self.split_vel = self.split_vel / PLAYER_SPLIT_DECELERATION if self.split_vel.length() > PLAYER_SPLIT_DECELERATION_DEADBAND else pygame.math.Vector2(0, 0)
 
         # Caps velocity to maximum speed
         if self.vel.length() > PLAYER_SPEED:
-            velVector = self.vel.normalize()
+            velVector = self.vel
             velVector.scale_to_length(PLAYER_SPEED)
             self.vel = velVector
 
@@ -157,13 +163,21 @@ class PlayerCell:
         return (pow(player_cell.pos.x - self.pos.x, 2) + pow(player_cell.pos.y - self.pos.y, 2)
                 <= pow(self.radius + player_cell.radius, 2))
 
-    def draw(self):
+    def draw(self, font):
         vector = (self.radius - self.radius_drawn) * PLAYER_RADIUS_FACTOR
         self.radius_drawn += vector
 
-        pygame.draw.circle(window, self.color,
-                           (get_scaled_size(self.pos.x) - camera.pos.x, get_scaled_size(self.pos.y) - camera.pos.y),
-                           get_scaled_size(self.radius_drawn))
+        scaled_pos = self.pos * camera.zoom - camera.pos
+        pygame.draw.circle(window, numpy.subtract(self.color, 20), scaled_pos, get_scaled_size(self.radius_drawn + 10))
+        pygame.draw.circle(window, self.color, scaled_pos, get_scaled_size(self.radius_drawn))
+
+        textSurface = font.render(self.name, FONT_ANTI_ALIAS, COLOR_WHITE, None)
+        heightWidthRatio = textSurface.get_height() / textSurface.get_width()
+        if heightWidthRatio < 0.4:
+            scaledSurface = pygame.transform.scale(textSurface, (self.radius_drawn * camera.zoom * 1.8, self.radius_drawn * camera.zoom * 1.8 * heightWidthRatio))
+        else:
+            scaledSurface = pygame.transform.scale(textSurface, (self.radius_drawn * camera.zoom * 0.75 / heightWidthRatio, self.radius_drawn * camera.zoom * 0.75))
+        window.blit(scaledSurface, scaled_pos - pygame.math.Vector2(scaledSurface.get_width(), scaledSurface.get_height()) / 2)
 
 
 class Cell:
@@ -189,8 +203,7 @@ class Cell:
 
     def move(self):
         self.pos += self.vel
-        self.vel = self.vel * CELLS_EJECT_DECELERATION if self.vel.length() > CELLS_EJECT_DECELERATION_DEADBAND else pygame.math.Vector2(
-            0, 0)
+        self.vel = self.vel * CELLS_EJECT_DECELERATION if self.vel.length() > CELLS_EJECT_DECELERATION_DEADBAND else pygame.math.Vector2(0, 0)
 
         # Prevents cell from leaving the map
         if self.pos.x < 0:
@@ -203,9 +216,7 @@ class Cell:
             self.pos.y = MAP_DIMENSIONS
 
     def draw(self):
-        pygame.draw.circle(window, self.color,
-                           (get_scaled_size(self.pos.x) - camera.pos.x, get_scaled_size(self.pos.y) - camera.pos.y),
-                           get_scaled_size(self.radius))
+        pygame.draw.circle(window, self.color, self.pos * camera.zoom - camera.pos, get_scaled_size(self.radius))
 
 
 def generate_cell():
@@ -223,7 +234,7 @@ def reset_map():
     clock = pygame.time.Clock()
     playerList = [PlayerCell(
         pygame.math.Vector2(pygame.math.Vector2(int(random() * MAP_DIMENSIONS), int(random() * MAP_DIMENSIONS))),
-        PLAYER_SIZE_START, (int(random() * 200) + 50, int(random() * 200) + 50, int(random() * 200) + 50))]
+        PLAYER_SIZE_START, (int(random() * 200) + 50, int(random() * 200) + 50, int(random() * 200) + 50), PLAYER_NAME)]
     camera = Camera(pygame.math.Vector2(playerList[0].pos.x, playerList[0].pos.y))
     cellsList = []
 
@@ -231,7 +242,12 @@ def reset_map():
         cellsList.append(generate_cell())
 
 
-def draw_window(font):
+def draw_text(text, font, text_color, bg_color, pos):
+    textSurface = font.render(text, FONT_ANTI_ALIAS, text_color, bg_color)
+    window.blit(textSurface, pos)
+
+
+def draw_window(font_debug, font_cells):
     window.fill(COLOR_WHITE)
 
     for m in range(0, MAP_DIMENSIONS + MAP_SPACE, MAP_SPACE):
@@ -247,35 +263,28 @@ def draw_window(font):
         c.draw()
 
     for p in playerList:
-        p.draw()
+        p.draw(font_cells)
 
     if DEBUG_TEXT:
-        textSurface = font.render("FPS: " + str(int(clock.get_fps())), False, COLOR_BLACK, COLOR_WHITE)
-        window.blit(textSurface, (10, 10))
-        textSurface = font.render(
-            "(x, y)[0]: (" + str(int(playerList[0].pos.x)) + ", " + str(int(playerList[0].pos.y)) + ")",
-            False, COLOR_BLACK, COLOR_WHITE)
-        window.blit(textSurface, (10, 12 + FONT_SIZE))
-        textSurface = font.render("Size[0]: " + str(int(playerList[0].size)), False, COLOR_BLACK, COLOR_WHITE)
-        window.blit(textSurface, (10, 14 + 2 * FONT_SIZE))
-        textSurface = font.render("# Player Cells: " + str(len(playerList)), False, COLOR_BLACK, COLOR_WHITE)
-        window.blit(textSurface, (10, 16 + 3 * FONT_SIZE))
-        textSurface = font.render("# Cells: " + str(len(cellsList)), False, COLOR_BLACK, COLOR_WHITE)
-        window.blit(textSurface, (10, 18 + 4 * FONT_SIZE))
-        textSurface = font.render("Zoom: " + str(camera.zoom), False, COLOR_BLACK, COLOR_WHITE)
-        window.blit(textSurface, (10, 20 + 5 * FONT_SIZE))
+        draw_text("FPS: " + str(int(clock.get_fps())), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING))
+        draw_text("(x, y)[0]: (" + str(int(playerList[0].pos.x)) + ", " + str(int(playerList[0].pos.y)) + ")", font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + FONT_DEBUG_SIZE + 2))
+        draw_text("Size[0]: " + str(int(playerList[0].size)), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 2 * FONT_DEBUG_SIZE + 4))
+        draw_text("# Player Cells: " + str(len(playerList)), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 3 * FONT_DEBUG_SIZE + 6))
+        draw_text("# Cells: " + str(len(cellsList)), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 4 * FONT_DEBUG_SIZE + 8))
+        draw_text("Zoom: " + str(camera.zoom), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 5 * FONT_DEBUG_SIZE + 10))
 
     pygame.display.update()
 
 
 def main():
-    global playerList, deltaTime
+    global playerList, deltaTime, DEBUG_TEXT
 
     reset_map()
     pygame.init()
     pygame.font.init()
     pygame.display.set_caption(WINDOW_TITLE)
-    font = pygame.font.Font(FONT_PATH, FONT_SIZE)
+    font_debug = pygame.font.Font(FONT_PATH, FONT_DEBUG_SIZE)
+    font_cells = pygame.font.Font(FONT_PATH, FONT_CELLS_SIZE)
     running = True
 
     while running:
@@ -291,10 +300,10 @@ def main():
                     splitCellsList = []
                     for p in playerList:
                         playerSize = p.size
-                        if playerSize > PLAYER_SPLIT_SIZE_MIN and len(playerList) < PLAYER_SPLIT_MAX:
+                        if playerSize > PLAYER_SPLIT_SIZE_MIN and len(playerList) + len(splitCellsList) < PLAYER_SPLIT_MAX:
                             p.change_size(-playerSize / 2)
                             p.split_timer = 0
-                            splitCell = PlayerCell(pygame.math.Vector2(p.pos.x, p.pos.y), playerSize / 2, p.color)
+                            splitCell = PlayerCell(pygame.math.Vector2(p.pos.x, p.pos.y), playerSize / 2, p.color, p.name)
                             splitCell.split(p, mousePos)
                             splitCell.split_timer = 0
                             splitCellsList.append(splitCell)
@@ -302,6 +311,9 @@ def main():
 
                 elif event.key == pygame.K_r:
                     reset_map()
+
+                elif event.key == pygame.K_e:
+                    DEBUG_TEXT = not DEBUG_TEXT
 
                 elif event.key == pygame.K_q:
                     running = False
@@ -336,6 +348,10 @@ def main():
         playerListLength = len(playerList)
 
         for index, p in enumerate(playerList):
+
+            # Player cell decays over time proportional to its size
+            p.change_size(-int(p.size * PLAYER_DECAY_RATE))
+
             averagePlayerPos += p.pos
             totalPlayerRadius += p.radius
 
@@ -354,7 +370,6 @@ def main():
                         if vector.length() == 0:
                             vector = pygame.math.Vector2(0, 1)
                         else:
-                            vector.normalize()
                             vector.scale_to_length(PLAYER_MERGE_SPEED)
 
                         p.pos += vector
@@ -385,7 +400,6 @@ def main():
                         if vector.length() == 0:
                             vector = pygame.math.Vector2(0, 1)
                         else:
-                            vector.normalize()
                             vector.scale_to_length(((p.radius + playerList[nextIndex].radius) -
                                                     playerList[nextIndex].pos.distance_to(p.pos)) / 2)
 
@@ -422,7 +436,7 @@ def main():
         # camera.pos.x = averagePlayerPos.x * camera.zoom - WINDOW_WIDTH / 2
         # camera.pos.y = averagePlayerPos.y * camera.zoom - WINDOW_HEIGHT / 2
 
-        draw_window(font)
+        draw_window(font_debug, font_cells)
 
     pygame.quit()
 
