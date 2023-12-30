@@ -17,29 +17,33 @@ FONT_CELLS_SIZE = 100
 FONT_ANTI_ALIAS = True
 
 # Camera variables
-deltaTime = 0
+deltaTimeCell = 0
+deltaTimeVirus = 0
 FPS = 60
 CAMERA_POS_FACTOR = 0.3
 CAMERA_ZOOM_START = 0.2
-CAMERA_ZOOM_FACTOR = 0.01
+CAMERA_ZOOM_FACTOR = 0.04
 CAMERA_ZOOM_DEADBAND = 0.01
 
 # Map variables
-MAP_DIMENSIONS = 3000
+MAP_DIMENSIONS = 4000
 MAP_SPACE = 50
 MAP_LINE_WIDTH = 1
+MAP_COLOR = (242, 251, 255)
+MAP_GRID_COLOR = (182, 188, 190)
 
 # Player variables
 PLAYER_NAME = "John Cena"
 PLAYER_SIZE_START = 100000
-PLAYER_SIZE_MIN = 1000
+PLAYER_SIZE_MIN = 4000
 PLAYER_SIZE_MAX = 5000000
 PLAYER_SPEED = 4
 PLAYER_ACCELERATION = 0.5
 PLAYER_DEADBAND = 40
 PLAYER_RADIUS_FACTOR = 0.1
 PLAYER_EJECT_SIZE_MIN = 3000
-PLAYER_SPLIT_SPEED = 30
+PLAYER_EJECT_SIZE_LOSS = 2000
+PLAYER_SPLIT_SPEED = 40.0
 PLAYER_SPLIT_DECELERATION = 1.04
 PLAYER_SPLIT_DECELERATION_DEADBAND = 0.1
 PLAYER_SPLIT_SIZE_MIN = 6000
@@ -52,24 +56,30 @@ PLAYER_DECAY_RATE = 0.00001
 
 # Cell variables
 CELLS_SIZE = 400
-CELLS_MAX = 1000
+CELLS_MAX = 2000
 CELLS_SPAWN_FREQUENCY = 20
-CELLS_EJECT_SIZE = 1600
+CELLS_EJECT_SIZE = 0.9 * PLAYER_EJECT_SIZE_LOSS
 CELLS_EJECT_SPEED = 12
 CELLS_EJECT_DECELERATION = 0.97
 CELLS_EJECT_DECELERATION_DEADBAND = 0.1
 
-# Colors
-COLOR_WHITE = (242, 251, 255)
-COLOR_BLACK = (0, 0, 0)
-COLOR_GRID = (182, 188, 190)
+# Virus variables
+VIRUS_SIZE = 40000
+VIRUS_MAX = 10
+VIRUS_SPAWN_FREQUENCY = 0.01
+VIRUS_SPLIT_SIZE = 8000
+VIRUS_COLOR = (0, 255, 0)
+VIRUS_OUTLINE_COLOR = (0, 234, 0)
+
+BLACK = (0, 0, 0)
 
 # Game objects
 global window
 global clock
-global playerList
 global camera
+global playerList
 global cellsList
+global virusList
 
 
 def get_scaled_size(size):
@@ -102,6 +112,7 @@ class PlayerCell:
         self.radius = math.sqrt(self.size / math.pi)
         self.radius_drawn = self.radius
         self.color = color
+        self.outline_color = numpy.subtract(self.color, 20)
         self.name = name
         self.split_timer = None
 
@@ -115,13 +126,12 @@ class PlayerCell:
         self.vel += self.acc
         self.pos += self.vel + self.split_vel
         # Gradually decreases velocity after splitting
-        self.split_vel = self.split_vel / PLAYER_SPLIT_DECELERATION if self.split_vel.length() > PLAYER_SPLIT_DECELERATION_DEADBAND else pygame.math.Vector2(0, 0)
+        self.split_vel = self.split_vel / PLAYER_SPLIT_DECELERATION if self.split_vel.length() > PLAYER_SPLIT_DECELERATION_DEADBAND else pygame.math.Vector2(
+            0, 0)
 
         # Caps velocity to maximum speed
         if self.vel.length() > PLAYER_SPEED:
-            velVector = self.vel
-            velVector.scale_to_length(PLAYER_SPEED)
-            self.vel = velVector
+            self.vel.scale_to_length(PLAYER_SPEED)
 
         # Prevents player from leaving the map
         if self.pos.x < 0:
@@ -148,16 +158,14 @@ class PlayerCell:
         self.radius = math.sqrt(self.size / math.pi)
 
     def split(self, player_cell, mouse_pos):
-        deltaPos = mouse_pos - self.pos
-        hypotenuse = deltaPos.length()
-        # Prevents division by zero
-        speedMod = hypotenuse and PLAYER_SPLIT_SPEED / hypotenuse or 0
+        direction = mouse_pos - player_cell.pos
 
-        self.split_vel = deltaPos * speedMod + player_cell.vel
+        if direction.length() == 0:
+            direction = pygame.math.Vector2(0, 1)
 
-        angle = math.atan2(player_cell.pos.y - mouse_pos.y, player_cell.pos.x - mouse_pos.x) - math.pi
-        self.pos.x = (player_cell.radius * math.cos(angle)) + player_cell.pos.x
-        self.pos.y = (player_cell.radius * math.sin(angle)) + player_cell.pos.y
+        self.split_vel = PLAYER_SPLIT_SPEED * direction.normalize()
+        direction.scale_to_length(player_cell.radius)
+        self.pos = direction + player_cell.pos
 
     def is_colliding(self, player_cell):
         return (pow(player_cell.pos.x - self.pos.x, 2) + pow(player_cell.pos.y - self.pos.y, 2)
@@ -168,20 +176,22 @@ class PlayerCell:
         self.radius_drawn += vector
 
         scaled_pos = self.pos * camera.zoom - camera.pos
-        pygame.draw.circle(window, numpy.subtract(self.color, 20), scaled_pos, get_scaled_size(self.radius_drawn + 10))
+        pygame.draw.circle(window, self.outline_color, scaled_pos, get_scaled_size(self.radius_drawn + 8))
         pygame.draw.circle(window, self.color, scaled_pos, get_scaled_size(self.radius_drawn))
 
-        textSurface = font.render(self.name, FONT_ANTI_ALIAS, COLOR_WHITE, None)
+        textSurface = font.render(self.name, FONT_ANTI_ALIAS, MAP_COLOR, None)
         heightWidthRatio = textSurface.get_height() / textSurface.get_width()
         if heightWidthRatio < 0.4:
-            scaledSurface = pygame.transform.scale(textSurface, (self.radius_drawn * camera.zoom * 1.8, self.radius_drawn * camera.zoom * 1.8 * heightWidthRatio))
+            scaledSurface = pygame.transform.scale(textSurface, (
+                self.radius_drawn * camera.zoom * 1.8, self.radius_drawn * camera.zoom * 1.8 * heightWidthRatio))
         else:
-            scaledSurface = pygame.transform.scale(textSurface, (self.radius_drawn * camera.zoom * 0.75 / heightWidthRatio, self.radius_drawn * camera.zoom * 0.75))
-        window.blit(scaledSurface, scaled_pos - pygame.math.Vector2(scaledSurface.get_width(), scaledSurface.get_height()) / 2)
+            scaledSurface = pygame.transform.scale(textSurface, (
+                self.radius_drawn * camera.zoom * 0.75 / heightWidthRatio, self.radius_drawn * camera.zoom * 0.75))
+        window.blit(scaledSurface,
+                    scaled_pos - pygame.math.Vector2(scaledSurface.get_width(), scaledSurface.get_height()) / 2)
 
 
 class Cell:
-
     def __init__(self, pos, size, color):
         self.pos = pos
         self.vel = pygame.math.Vector2(0, 0)
@@ -190,20 +200,19 @@ class Cell:
         self.color = color
 
     def eject(self, player_cell, mouse_pos):
-        deltaPos = mouse_pos - self.pos
-        hypotenuse = deltaPos.length()
-        # Prevents division by zero
-        speedMod = hypotenuse and CELLS_EJECT_SPEED / hypotenuse or 0
+        direction = mouse_pos - player_cell.pos
 
-        self.vel = deltaPos * speedMod + player_cell.vel
+        if direction.length() == 0:
+            direction = pygame.math.Vector2(0, 1)
 
-        angle = math.atan2(player_cell.pos.y - mouse_pos.y, player_cell.pos.x - mouse_pos.x) - math.pi
-        self.pos.x = (player_cell.radius * math.cos(angle)) + player_cell.pos.x
-        self.pos.y = (player_cell.radius * math.sin(angle)) + player_cell.pos.y
+        self.vel = CELLS_EJECT_SPEED * direction.normalize()
+        direction.scale_to_length(player_cell.radius)
+        self.pos = direction + player_cell.pos
 
     def move(self):
         self.pos += self.vel
-        self.vel = self.vel * CELLS_EJECT_DECELERATION if self.vel.length() > CELLS_EJECT_DECELERATION_DEADBAND else pygame.math.Vector2(0, 0)
+        self.vel = self.vel * CELLS_EJECT_DECELERATION if self.vel.length() > CELLS_EJECT_DECELERATION_DEADBAND else pygame.math.Vector2(
+            0, 0)
 
         # Prevents cell from leaving the map
         if self.pos.x < 0:
@@ -219,16 +228,33 @@ class Cell:
         pygame.draw.circle(window, self.color, self.pos * camera.zoom - camera.pos, get_scaled_size(self.radius))
 
 
+class Virus:
+    def __init__(self, pos):
+        self.pos = pos
+        self.size = VIRUS_SIZE
+        self.radius = math.sqrt(self.size / math.pi)
+        self.color = VIRUS_COLOR
+        self.outline_color = VIRUS_OUTLINE_COLOR
+
+    def draw(self):
+        pygame.draw.circle(window, self.outline_color, self.pos * camera.zoom - camera.pos,
+                           get_scaled_size(self.radius + 8))
+        pygame.draw.circle(window, self.color, self.pos * camera.zoom - camera.pos, get_scaled_size(self.radius))
+
+
 def generate_cell():
-    return Cell(pygame.math.Vector2(int(random() * MAP_DIMENSIONS),
-                                    int(random() * MAP_DIMENSIONS)), CELLS_SIZE,
+    return Cell(pygame.math.Vector2(int(random() * MAP_DIMENSIONS), int(random() * MAP_DIMENSIONS)), CELLS_SIZE,
                 (int(random() * 200) + 50,
                  int(random() * 200) + 50,
                  int(random() * 200) + 50))
 
 
+def generate_virus():
+    return Virus(pygame.math.Vector2(int(random() * MAP_DIMENSIONS), int(random() * MAP_DIMENSIONS)))
+
+
 def reset_map():
-    global window, clock, playerList, camera, cellsList
+    global window, clock, camera, playerList, cellsList, virusList
 
     window = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     clock = pygame.time.Clock()
@@ -237,9 +263,13 @@ def reset_map():
         PLAYER_SIZE_START, (int(random() * 200) + 50, int(random() * 200) + 50, int(random() * 200) + 50), PLAYER_NAME)]
     camera = Camera(pygame.math.Vector2(playerList[0].pos.x, playerList[0].pos.y))
     cellsList = []
+    virusList = []
 
     for c in range(CELLS_MAX):
         cellsList.append(generate_cell())
+
+    for v in range(VIRUS_MAX):
+        virusList.append(generate_virus())
 
 
 def draw_text(text, font, text_color, bg_color, pos):
@@ -248,36 +278,54 @@ def draw_text(text, font, text_color, bg_color, pos):
 
 
 def draw_window(font_debug, font_cells):
-    window.fill(COLOR_WHITE)
+    window.fill(MAP_COLOR)
 
     for m in range(0, MAP_DIMENSIONS + MAP_SPACE, MAP_SPACE):
-        pygame.draw.line(window, COLOR_GRID,
+        pygame.draw.line(window, MAP_GRID_COLOR,
                          (get_scaled_size(m) - camera.pos.x, -camera.pos.y),
                          (get_scaled_size(m) - camera.pos.x, get_scaled_size(MAP_DIMENSIONS) - camera.pos.y),
                          MAP_LINE_WIDTH)
-        pygame.draw.line(window, COLOR_GRID,
+        pygame.draw.line(window, MAP_GRID_COLOR,
                          (get_scaled_size(MAP_DIMENSIONS) - camera.pos.x, get_scaled_size(m) - camera.pos.y),
                          (-camera.pos.x, get_scaled_size(m) - camera.pos.y), MAP_LINE_WIDTH)
 
     for c in cellsList:
         c.draw()
 
-    for p in playerList:
+    for v in virusList:
+        v.draw()
+
+    averagePlayerPos = pygame.math.Vector2(0, 0)
+    totalPlayerSize = 0
+
+    for p in reversed(playerList):
+        averagePlayerPos += p.pos
+        totalPlayerSize += p.size
         p.draw(font_cells)
 
+    averagePlayerPos /= len(playerList)
+
     if DEBUG_TEXT:
-        draw_text("FPS: " + str(int(clock.get_fps())), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING))
-        draw_text("(x, y)[0]: (" + str(int(playerList[0].pos.x)) + ", " + str(int(playerList[0].pos.y)) + ")", font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + FONT_DEBUG_SIZE + 2))
-        draw_text("Size[0]: " + str(int(playerList[0].size)), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 2 * FONT_DEBUG_SIZE + 4))
-        draw_text("# Player Cells: " + str(len(playerList)), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 3 * FONT_DEBUG_SIZE + 6))
-        draw_text("# Cells: " + str(len(cellsList)), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 4 * FONT_DEBUG_SIZE + 8))
-        draw_text("Zoom: " + str(camera.zoom), font_debug, COLOR_BLACK, COLOR_WHITE, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 5 * FONT_DEBUG_SIZE + 10))
+        draw_text("FPS: " + str(int(clock.get_fps())), font_debug, BLACK, MAP_COLOR,
+                  (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING))
+        draw_text("(x, y): (" + str(int(averagePlayerPos.x)) + ", " + str(int(averagePlayerPos.y)) + ")", font_debug,
+                  BLACK, MAP_COLOR, (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + FONT_DEBUG_SIZE + 2))
+        draw_text("Size: " + str(int(totalPlayerSize)), font_debug, BLACK, MAP_COLOR,
+                  (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 2 * FONT_DEBUG_SIZE + 4))
+        draw_text("# Player Cells: " + str(len(playerList)), font_debug, BLACK, MAP_COLOR,
+                  (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 3 * FONT_DEBUG_SIZE + 6))
+        draw_text("# Cells: " + str(len(cellsList)), font_debug, BLACK, MAP_COLOR,
+                  (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 4 * FONT_DEBUG_SIZE + 8))
+        draw_text("# Viruses: " + str(len(virusList)), font_debug, BLACK, MAP_COLOR,
+                  (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 5 * FONT_DEBUG_SIZE + 10))
+        draw_text("Zoom: " + str(camera.zoom), font_debug, BLACK, MAP_COLOR,
+                  (DEBUG_TEXT_PADDING, DEBUG_TEXT_PADDING + 6 * FONT_DEBUG_SIZE + 12))
 
     pygame.display.update()
 
 
 def main():
-    global playerList, deltaTime, DEBUG_TEXT
+    global playerList, deltaTimeCell, deltaTimeVirus, DEBUG_TEXT
 
     reset_map()
     pygame.init()
@@ -289,7 +337,8 @@ def main():
 
     while running:
         clock.tick(FPS)
-        deltaTime += 1
+        deltaTimeCell += 1
+        deltaTimeVirus += 1
 
         mouseX, mouseY = mouse.get_pos()
         mousePos = pygame.math.Vector2((mouseX + camera.pos.x) / camera.zoom, (mouseY + camera.pos.y) / camera.zoom)
@@ -300,10 +349,12 @@ def main():
                     splitCellsList = []
                     for p in playerList:
                         playerSize = p.size
-                        if playerSize > PLAYER_SPLIT_SIZE_MIN and len(playerList) + len(splitCellsList) < PLAYER_SPLIT_MAX:
+                        if playerSize > PLAYER_SPLIT_SIZE_MIN and len(playerList) + len(
+                                splitCellsList) < PLAYER_SPLIT_MAX:
                             p.change_size(-playerSize / 2)
                             p.split_timer = 0
-                            splitCell = PlayerCell(pygame.math.Vector2(p.pos.x, p.pos.y), playerSize / 2, p.color, p.name)
+                            splitCell = PlayerCell(pygame.math.Vector2(p.pos.x, p.pos.y), playerSize / 2, p.color,
+                                                   p.name)
                             splitCell.split(p, mousePos)
                             splitCell.split_timer = 0
                             splitCellsList.append(splitCell)
@@ -326,7 +377,7 @@ def main():
         if key[pygame.K_w]:
             for p in playerList:
                 if p.size > PLAYER_EJECT_SIZE_MIN:
-                    p.change_size(-CELLS_EJECT_SIZE)
+                    p.change_size(-PLAYER_EJECT_SIZE_LOSS)
                     ejectedCell = Cell(pygame.math.Vector2(p.pos.x, p.pos.y), CELLS_EJECT_SIZE, p.color)
                     ejectedCell.eject(p, mousePos)
                     cellsList.append(ejectedCell)
@@ -343,9 +394,41 @@ def main():
             for p in playerList:
                 p.change_size(20 * p.radius)
 
+        for c in cellsList:
+            c.move()
+            for p in playerList:
+                if p.overlaps(c.pos, c.radius):
+                    p.change_size(c.size)
+                    if cellsList.__contains__(c):
+                        cellsList.remove(c)
+
+        splitCellsList = []
+        for v in virusList:
+            for p in playerList:
+                if p.overlaps(v.pos, v.radius):
+                    virusList.remove(v)
+                    if len(playerList) >= PLAYER_SPLIT_MAX:
+                        p.change_size(v.size)
+                    else:
+                        maxSplits = int(min((p.size - PLAYER_SIZE_MIN) / VIRUS_SPLIT_SIZE, PLAYER_SPLIT_MAX - (len(playerList) + len(splitCellsList))))
+                        p.change_size(-maxSplits * VIRUS_SPLIT_SIZE)
+                        p.split_timer = 0
+                        for m in range(maxSplits):
+                            splitCell = PlayerCell(pygame.math.Vector2(p.pos.x, p.pos.y), VIRUS_SPLIT_SIZE, p.color, p.name)
+                            angle = random() * 2.0 * math.pi
+                            vector = pygame.math.Vector2((math.cos(angle) * p.pos.x + camera.pos.x) / camera.zoom,
+                                                         (math.sin(angle) * p.pos.y + camera.pos.y) / camera.zoom)
+                            splitCell.split(p, vector)
+                            splitCell.split_timer = 0
+                            splitCellsList.append(splitCell)
+
+        playerList += splitCellsList
+
         averagePlayerPos = pygame.math.Vector2(0, 0)
         totalPlayerRadius = 0
         playerListLength = len(playerList)
+
+        playerList.sort(key=lambda x: x.size, reverse=True)
 
         for index, p in enumerate(playerList):
 
@@ -375,17 +458,16 @@ def main():
                         p.pos += vector
                         playerList[nextIndex].pos -= vector
 
-                    if (playerList[nextIndex].radius > p.radius and
-                            (playerList[nextIndex].overlaps(p.pos, p.radius) or
-                             (playerList[nextIndex].pos.x - PLAYER_MERGE_DEADBAND < p.pos.x <
-                              playerList[nextIndex].pos.x + PLAYER_MERGE_DEADBAND and
-                              playerList[nextIndex].pos.y - PLAYER_MERGE_DEADBAND <
-                              p.pos.y < playerList[nextIndex].pos.y + PLAYER_MERGE_DEADBAND))):
-                        playerList[nextIndex].change_size(p.size)
-                        if playerList.__contains__(p):
-                            playerList.remove(p)
-                            playerListLength -= 1
-                    elif (p.overlaps(playerList[nextIndex].pos, playerList[nextIndex].radius) or
+                    # if ((playerList[nextIndex].overlaps(p.pos, p.radius) or
+                    #      (playerList[nextIndex].pos.x - PLAYER_MERGE_DEADBAND < p.pos.x <
+                    #       playerList[nextIndex].pos.x + PLAYER_MERGE_DEADBAND and
+                    #       playerList[nextIndex].pos.y - PLAYER_MERGE_DEADBAND <
+                    #       p.pos.y < playerList[nextIndex].pos.y + PLAYER_MERGE_DEADBAND))):
+                    #     playerList[nextIndex].change_size(p.size)
+                    #     if playerList.__contains__(p):
+                    #         playerList.remove(p)
+                    #         playerListLength -= 1
+                    if (p.overlaps(playerList[nextIndex].pos, playerList[nextIndex].radius) or
                           (playerList[nextIndex].pos.x - PLAYER_MERGE_DEADBAND < p.pos.x <
                            playerList[nextIndex].pos.x + PLAYER_MERGE_DEADBAND and
                            playerList[nextIndex].pos.y - PLAYER_MERGE_DEADBAND <
@@ -409,20 +491,16 @@ def main():
 
                 nextIndex += 1
 
-        for c in cellsList:
-            c.move()
-            for p in playerList:
-                if p.overlaps(c.pos, c.radius):
-                    p.change_size(c.size)
-                    if cellsList.__contains__(c):
-                        cellsList.remove(c)
-
-        # Generates new cells
+        # Generates new cells and viruses
         cellsListLength = len(cellsList)
-        if cellsListLength < CELLS_MAX and deltaTime % (
-                int((cellsListLength + CELLS_SPAWN_FREQUENCY) / CELLS_SPAWN_FREQUENCY)) == 0:
-            deltaTime = 0
+        if cellsListLength < CELLS_MAX and deltaTimeCell % (int((cellsListLength + CELLS_SPAWN_FREQUENCY) / CELLS_SPAWN_FREQUENCY)) == 0:
+            deltaTimeCell = 0
             cellsList.append(generate_cell())
+
+        virusListLength = len(virusList)
+        if virusListLength < VIRUS_MAX and deltaTimeVirus % (int((virusListLength + VIRUS_SPAWN_FREQUENCY) / VIRUS_SPAWN_FREQUENCY)) == 0:
+            deltaTimeVirus = 0
+            virusList.append(generate_virus())
 
         # Smooth camera zoom
         averagePlayerPos /= playerListLength
@@ -441,4 +519,5 @@ def main():
     pygame.quit()
 
 
-main()
+if __name__ == "__main__":
+    main()
