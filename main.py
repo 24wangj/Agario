@@ -41,7 +41,7 @@ PLAYER_SPEED = 4
 PLAYER_ACCELERATION = 0.5
 PLAYER_DEADBAND = 40
 PLAYER_RADIUS_FACTOR = 0.1
-PLAYER_EJECT_SIZE_MIN = 3000
+PLAYER_EJECT_SIZE_MIN = 6000
 PLAYER_EJECT_SIZE_LOSS = 2000
 PLAYER_SPLIT_SPEED = 40.0
 PLAYER_SPLIT_DECELERATION = 1.04
@@ -59,7 +59,7 @@ CELLS_SIZE = 400
 CELLS_MAX = 2000
 CELLS_SPAWN_FREQUENCY = 20
 CELLS_EJECT_SIZE = 0.9 * PLAYER_EJECT_SIZE_LOSS
-CELLS_EJECT_SPEED = 12
+CELLS_EJECT_SPEED = 16
 CELLS_EJECT_DECELERATION = 0.97
 CELLS_EJECT_DECELERATION_DEADBAND = 0.1
 
@@ -289,19 +289,19 @@ def draw_window(font_debug, font_cells):
                          (get_scaled_size(MAP_DIMENSIONS) - camera.pos.x, get_scaled_size(m) - camera.pos.y),
                          (-camera.pos.x, get_scaled_size(m) - camera.pos.y), MAP_LINE_WIDTH)
 
-    for c in cellsList:
-        c.draw()
-
-    for v in virusList:
-        v.draw()
-
     averagePlayerPos = pygame.math.Vector2(0, 0)
     totalPlayerSize = 0
 
-    for p in reversed(playerList):
-        averagePlayerPos += p.pos
-        totalPlayerSize += p.size
-        p.draw(font_cells)
+    combinedList = cellsList + virusList + playerList
+    combinedList.sort(key=lambda x: x.size, reverse=False)
+    
+    for i in combinedList:
+        if isinstance(i, PlayerCell):
+            averagePlayerPos += i.pos
+            totalPlayerSize += i.size
+            i.draw(font_cells)
+        else:
+            i.draw()
 
     averagePlayerPos /= len(playerList)
 
